@@ -1,25 +1,30 @@
+// ARXIU: src/components/ResourceSheet.jsx
+
 'use client'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, ExternalLink, BookOpen, Video, Film, FileText, Quote, Mic, Share2, Check } from 'lucide-react'
+import { 
+  X, ExternalLink, BookOpen, Video, Film, FileText, 
+  Quote, Mic, Share2, Check, Youtube, ShoppingBag, 
+  Library, Music, Download
+} from 'lucide-react'
 import { useState } from 'react'
+import { urlFor } from '@/sanity' 
 
-export default function ResourceSheet({ recurs, isOpen, onClose }) {
+export default function ResourceSheet({ recurs, isOpen, onClose, onTagClick }) {
   const [copied, setCopied] = useState(false)
 
   if (!recurs) return null;
 
-  // Lògica de Compartir
   const handleShare = () => {
     const shareData = {
       title: recurs.titol,
       text: `Mira aquest recurs del Mercat de les Flors: ${recurs.titol}`,
-      url: window.location.href // Comparteix la URL actual (que ja té els filtres, es podria millorar amb IDs)
+      url: window.location.href 
     }
 
     if (navigator.share) {
       navigator.share(shareData).catch((err) => console.log('Error compartint', err));
     } else {
-      // Fallback: Copiar al portapapers
       navigator.clipboard.writeText(`${shareData.title} - ${shareData.url}`);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -42,6 +47,33 @@ export default function ResourceSheet({ recurs, isOpen, onClose }) {
     return <BookOpen size={18} />
   }
 
+  // --- NOVA FUNCIÓ: DETECTOR D'ENLLAÇOS ---
+  const detectarTipusEnllac = (url) => {
+    const u = url.toLowerCase()
+    
+    if (u.includes('youtube') || u.includes('youtu.be')) {
+      return { icon: <Youtube size={18} />, label: 'Veure a YouTube', style: 'hover:bg-red-50 hover:text-red-600 hover:border-red-200' }
+    }
+    if (u.includes('vimeo')) {
+      return { icon: <Video size={18} />, label: 'Veure a Vimeo', style: 'hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200' }
+    }
+    if (u.includes('spotify') || u.includes('apple') || u.includes('soundcloud')) {
+      return { icon: <Music size={18} />, label: 'Escoltar Àudio', style: 'hover:bg-green-50 hover:text-green-600 hover:border-green-200' }
+    }
+    if (u.includes('amazon') || u.includes('casadellibro') || u.includes('llibreria')) {
+      return { icon: <ShoppingBag size={18} />, label: 'Comprar Llibre', style: 'hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200' }
+    }
+    if (u.includes('aladi') || u.includes('biblio') || u.includes('catàleg')) {
+      return { icon: <Library size={18} />, label: 'Catàleg Biblioteques', style: 'hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200' }
+    }
+    if (u.endsWith('.pdf')) {
+      return { icon: <Download size={18} />, label: 'Descarregar PDF', style: 'hover:bg-slate-100 hover:text-slate-800' }
+    }
+    
+    // Per defecte
+    return { icon: <ExternalLink size={18} />, label: 'Visitar enllaç', style: 'hover:opacity-90' }
+  }
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -55,132 +87,162 @@ export default function ResourceSheet({ recurs, isOpen, onClose }) {
             className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50"
           />
 
-          {/* PANEL LATERAL / BOTTOM SHEET */}
+          {/* PANEL LATERAL */}
           <motion.div 
             initial={{ y: "100%" }}
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ type: "spring", damping: 25, stiffness: 200 }}
-            className="fixed bottom-0 inset-x-0 lg:inset-y-0 lg:right-0 lg:left-auto lg:w-[480px] bg-background z-50 shadow-2xl flex flex-col rounded-t-[32px] lg:rounded-l-[32px] lg:rounded-tr-none border-t lg:border-t-0 lg:border-l border-border max-h-[95vh] lg:max-h-full"
+            className="fixed bottom-0 inset-x-0 lg:inset-y-0 lg:right-0 lg:left-auto lg:w-[500px] bg-background z-50 shadow-2xl flex flex-col rounded-t-[32px] lg:rounded-l-[32px] lg:rounded-tr-none border-t lg:border-t-0 lg:border-l border-border max-h-[95vh] lg:max-h-full"
           >
             {/* Tirador per a mòbil */}
-            <div className="h-1.5 w-12 bg-border/60 rounded-full mx-auto mt-4 mb-2 lg:hidden flex-shrink-0" />
+            <div className="h-1.5 w-12 bg-border/60 rounded-full mx-auto mt-4 mb-1 lg:hidden flex-shrink-0 z-20 relative" />
 
-            <div className="flex-1 overflow-y-auto p-6 lg:p-10 scroll-smooth">
+            <div className="flex-1 overflow-y-auto scroll-smooth">
               
-              {/* CAPÇALERA AMB ACCIONS */}
-              <div className="flex justify-between items-start mb-8">
-                <div className="flex flex-wrap gap-2 items-center">
-                  <span className="flex items-center gap-2 px-3 py-1 bg-card border border-border rounded-full text-[10px] font-bold uppercase text-muted shadow-sm">
-                    {getIcon(recurs.tipus)} {recurs.tipus}
-                  </span>
-                  {recurs.espectacle && (
-                    <span className="px-3 py-1 bg-accent/5 text-accent border border-accent/20 rounded-full text-[10px] font-bold uppercase">
-                      {recurs.espectacle}
-                    </span>
-                  )}
+              {/* IMATGE DE PORTADA */}
+              {recurs.imatge && (
+                <div className="relative h-64 w-full bg-muted/10">
+                  <img 
+                    src={urlFor(recurs.imatge).width(800).url()} 
+                    alt={recurs.titol}
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-background/20 to-transparent" />
                 </div>
+              )}
+
+              <div className="p-6 lg:p-10">
                 
-                <div className="flex items-center gap-2">
-                  {/* Botó Compartir */}
-                  <button 
-                    onClick={handleShare}
-                    className="p-2.5 hover:bg-card rounded-full transition-all text-muted hover:text-foreground border border-transparent hover:border-border"
-                    title="Compartir recurs"
-                  >
-                    {copied ? <Check size={20} className="text-green-600" /> : <Share2 size={20} />}
-                  </button>
-                  
-                  {/* Botó Tancar */}
-                  <button 
-                    onClick={onClose}
-                    className="p-2.5 bg-card hover:bg-muted/20 rounded-full transition-all text-foreground border border-border shadow-sm"
-                  >
-                    <X size={20} />
-                  </button>
-                </div>
-              </div>
+                {/* CAPÇALERA */}
+                <div className="flex justify-between items-start mb-8">
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <span className="flex items-center gap-2 px-3 py-1 bg-card border border-border rounded-full text-[10px] font-bold uppercase text-muted shadow-sm">
+                      {getIcon(recurs.tipus)} {recurs.tipus}
+                    </span>
+                    
+                    {recurs.edat && (
+                       <span className="px-3 py-1 bg-muted/10 text-muted-foreground border border-border rounded-full text-[10px] font-bold uppercase">
+                         {recurs.edat}
+                       </span>
+                    )}
 
-              {/* CONTINGUT PRINCIPAL */}
-              <div className="space-y-8">
-                <div>
-                  <h2 className="text-3xl lg:text-4xl font-bold leading-[1.1] mb-3 tracking-tight">
-                    {recurs.titol}
-                  </h2>
-                  <p className="text-xl text-muted italic font-serif">
-                    {recurs.autor}
-                  </p>
-                </div>
-
-                {/* METADATES (GRID) */}
-                <div className="grid grid-cols-2 gap-6 p-5 bg-card/50 rounded-2xl border border-border/50">
-                  {recurs.editorial && (
-                    <div>
-                      <span className="block text-[10px] font-bold text-muted uppercase tracking-widest mb-1">Editorial</span>
-                      <p className="font-medium text-sm">{recurs.editorial}</p>
-                    </div>
-                  )}
-                  {recurs.any && (
-                    <div>
-                      <span className="block text-[10px] font-bold text-muted uppercase tracking-widest mb-1">Any</span>
-                      <p className="font-medium text-sm">{recurs.any}</p>
-                    </div>
-                  )}
-                  {recurs.lloc && (
-                    <div>
-                      <span className="block text-[10px] font-bold text-muted uppercase tracking-widest mb-1">Lloc</span>
-                      <p className="font-medium text-sm">{recurs.lloc}</p>
-                    </div>
-                  )}
-                  {recurs.idioma && (
-                    <div>
-                      <span className="block text-[10px] font-bold text-muted uppercase tracking-widest mb-1">Idioma</span>
-                      <p className="font-medium text-sm">{recurs.idioma}</p>
-                    </div>
-                  )}
-                </div>
-
-                {/* ENLLAÇOS */}
-                <div className="space-y-3 pt-2">
-                  <h3 className="text-[10px] font-bold text-muted uppercase tracking-widest mb-3">Accés al recurs</h3>
-                  {recurs.enllacos?.length > 0 ? (
-                    recurs.enllacos.map((link, i) => (
-                      <a 
-                        key={i} 
-                        href={link.url} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        onClick={handleLinkClick}
-                        className="group flex items-center justify-between w-full p-4 lg:p-5 bg-foreground text-background rounded-2xl font-bold text-sm hover:opacity-90 transition-all shadow-lg active:scale-[0.98]"
-                      >
-                        <span className="uppercase tracking-wide pr-4 truncate">
-                          {link.titol || 'Obrir recurs extern'}
-                        </span>
-                        <ExternalLink size={18} className="group-hover:translate-x-1 transition-transform" />
-                      </a>
-                    ))
-                  ) : (
-                    <div className="p-6 bg-card border border-border border-dashed rounded-2xl text-center">
-                      <BookOpen className="mx-auto mb-2 text-muted/50" size={24} />
-                      <p className="text-sm text-muted font-medium">Disponible per consulta a la biblioteca física.</p>
-                      <p className="text-xs text-muted/60 mt-1 uppercase tracking-wider">Mercat de les Flors</p>
-                    </div>
-                  )}
-                </div>
-
-                {/* CONCEPTES / TAGS */}
-                {recurs.conceptes && recurs.conceptes.length > 0 && (
-                  <div className="pt-6 border-t border-border">
-                    <h3 className="text-[10px] font-bold text-muted uppercase tracking-widest mb-4">Conceptes Clau</h3>
-                    <div className="flex flex-wrap gap-2">
-                      {recurs.conceptes.map((c, i) => (
-                        <span key={i} className="px-3 py-1.5 bg-card text-muted-foreground text-xs rounded-lg border border-border">
-                          #{c}
-                        </span>
-                      ))}
-                    </div>
+                    {recurs.espectacle && (
+                      <span className="px-3 py-1 bg-accent/5 text-accent border border-accent/20 rounded-full text-[10px] font-bold uppercase">
+                        {recurs.espectacle}
+                      </span>
+                    )}
                   </div>
-                )}
+                  
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={handleShare}
+                      className="p-2.5 hover:bg-card rounded-full transition-all text-muted hover:text-foreground border border-transparent hover:border-border"
+                    >
+                      {copied ? <Check size={20} className="text-green-600" /> : <Share2 size={20} />}
+                    </button>
+                    <button 
+                      onClick={onClose}
+                      className="p-2.5 bg-card hover:bg-muted/20 rounded-full transition-all text-foreground border border-border shadow-sm"
+                    >
+                      <X size={20} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* CONTINGUT */}
+                <div className="space-y-8">
+                  <div>
+                    <h2 className="text-3xl lg:text-4xl font-bold leading-[1.1] mb-3 tracking-tight">
+                      {recurs.titol}
+                    </h2>
+                    <p className="text-xl text-muted italic font-serif">
+                      {recurs.autor}
+                    </p>
+                  </div>
+
+                  {/* METADATES */}
+                  <div className="grid grid-cols-2 gap-6 p-5 bg-card/50 rounded-2xl border border-border/50">
+                    {recurs.editorial && (
+                      <div>
+                        <span className="block text-[10px] font-bold text-muted uppercase tracking-widest mb-1">Editorial</span>
+                        <p className="font-medium text-sm">{recurs.editorial}</p>
+                      </div>
+                    )}
+                    {recurs.any && (
+                      <div>
+                        <span className="block text-[10px] font-bold text-muted uppercase tracking-widest mb-1">Any</span>
+                        <p className="font-medium text-sm">{recurs.any}</p>
+                      </div>
+                    )}
+                    {recurs.lloc && (
+                      <div>
+                        <span className="block text-[10px] font-bold text-muted uppercase tracking-widest mb-1">Lloc</span>
+                        <p className="font-medium text-sm">{recurs.lloc}</p>
+                      </div>
+                    )}
+                    {recurs.idioma && (
+                      <div>
+                        <span className="block text-[10px] font-bold text-muted uppercase tracking-widest mb-1">Idioma</span>
+                        <p className="font-medium text-sm">{recurs.idioma}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* BOTONS D'ENLLAÇ MILLORATS */}
+                  <div className="space-y-3 pt-2">
+                    <h3 className="text-[10px] font-bold text-muted uppercase tracking-widest mb-3">Accés al recurs</h3>
+                    {recurs.enllacos?.length > 0 ? (
+                      recurs.enllacos.map((link, i) => {
+                        const linkInfo = detectarTipusEnllac(link.url)
+                        
+                        return (
+                          <a 
+                            key={i} 
+                            href={link.url} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            onClick={handleLinkClick}
+                            className={`group flex items-center justify-between w-full p-4 lg:p-5 bg-foreground text-background border border-transparent rounded-2xl font-bold text-sm transition-all shadow-lg active:scale-[0.98] ${linkInfo.style}`}
+                          >
+                            <span className="uppercase tracking-wide pr-4 truncate flex items-center gap-3">
+                              {/* Mostrem la icona específica si existeix */}
+                              {linkInfo.icon}
+                              {link.titol || linkInfo.label}
+                            </span>
+                            
+                            {/* Icona fletxa per defecte a la dreta */}
+                            <ExternalLink size={18} className="opacity-50 group-hover:translate-x-1 transition-transform group-hover:opacity-100" />
+                          </a>
+                        )
+                      })
+                    ) : (
+                      <div className="p-6 bg-card border border-border border-dashed rounded-2xl text-center">
+                        <BookOpen className="mx-auto mb-2 text-muted/50" size={24} />
+                        <p className="text-sm text-muted font-medium">Disponible per consulta a la biblioteca física.</p>
+                        <p className="text-xs text-muted/60 mt-1 uppercase tracking-wider">Mercat de les Flors</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* TAGS */}
+                  {recurs.conceptes && recurs.conceptes.length > 0 && (
+                    <div className="pt-6 border-t border-border">
+                      <h3 className="text-[10px] font-bold text-muted uppercase tracking-widest mb-4">Conceptes Clau (Explorar més)</h3>
+                      <div className="flex flex-wrap gap-2">
+                        {recurs.conceptes.map((c, i) => (
+                          <button
+                            key={i}
+                            onClick={() => onTagClick && onTagClick(c)}
+                            className="px-3 py-1.5 bg-card hover:bg-accent hover:text-white hover:border-accent text-muted-foreground text-xs rounded-lg border border-border transition-all active:scale-95"
+                          >
+                            #{c}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </motion.div>

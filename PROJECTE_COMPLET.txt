@@ -101,75 +101,220 @@ export default function RootLayout({ children }) {
 
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, Suspense } from 'react'
 import { client } from '@/sanity'
+import { motion, AnimatePresence } from 'framer-motion'
 import { 
-  Search, BookOpen, Video, Film, Quote, FileText, 
-  Mic, ArrowRight
+  Video, Film, Quote, FileText, 
+  Mic, BookOpen, ChevronDown, ArrowLeft 
 } from 'lucide-react'
 
-// Importem els nous components que hem creat a la carpeta /components
+import { useQueryState } from '@/hooks/useQueryState'
 import HeaderMercat from '@/components/HeaderMercat'
 import ResourceSheet from '@/components/ResourceSheet'
+import ResourceCard from '@/components/ResourceCard'
+import SkeletonList from '@/components/SkeletonList'
+import ScrollToTop from '@/components/ScrollToTop'
+import Toast from '@/components/Toast'
+import HomeSelector from '@/components/HomeSelector'
+import SearchBar from '@/components/SearchBar'
 
-// Configurar quines categories es consideren "Temes" i no espectacles [cite: 8]
 const TEMES_GENERALS = [
   'art general', 
   'cos i moviment', 
-  'art', 
-  'cos',
   'dansa i arquitectura'
 ]
 
-export default function Home() {
-  const [recursos, setRecurs] = useState([])
-  
-  // Estats dels Filtres [cite: 9]
-  const [filtreText, setFiltreText] = useState('')
-  const [contextActiu, setContextActiu] = useState('Tots')
-  const [tipusActiu, setTipusActiu] = useState('Tots')
-  
-  // Estat per al recurs seleccionat (obre el ResourceSheet) [cite: 9]
-  const [recursSeleccionat, setRecursSeleccionat] = useState(null)
+// Afegim també els noms curts a la llista negra per si de cas, 
+// tot i que la nova lògica ja els hauria d'ignorar.
+const BLACKLIST = ['art', 'cos', 'dansa', 'cometa', 'heka', 'mirkids']
 
-  // 1. Càrrega de dades des de Sanity [cite: 9, 10]
+// --- FUNCIÓ DE NORMALITZACIÓ (Clau per vincular noms llargs i curts) ---
+const createSlug = (text) => {
+  if (!text) return ''
+  return text
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Sense accents
+    .replace(/[^a-z0-9]/g, '') // Només lletres i números (sense espais ni guions)
+}
+
+export default function Page() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-background" />}>
+      <HomeContent />
+    </Suspense>
+  )
+}
+
+function HomeContent() {
+  const { searchParams, updateQuery } = useQueryState()
+
+  const [recursos, setRecurs] = useState([])
+  const [estatsEspectacles, setEstatsEspectacles] = useState([]) 
+  const [loading, setLoading] = useState(true)
+  
+  const [filtreText, setFiltreText] = useState(searchParams.get('q') || '')
+  const [contextActiu, setContextActiu] = useState(searchParams.get('context') || 'HOME')
+  const [tipusActiu, setTipusActiu] = useState(searchParams.get('tipus') || 'Tots')
+  const [veureFavorits, setVeureFavorits] = useState(false) 
+  const [recursSeleccionat, setRecursSeleccionat] = useState(null)
+  const [favorits, setFavorits] = useState([]) 
+  const [toast, setToast] = useState({ show: false, message: '' })
+
   useEffect(() => {
     const fetchDades = async () => {
-      const query = `*[_type == "recurs"] | order(titol asc) {
-        _id, titol, autor, any, editorial, tipus,
-        conceptes, enllacos, categoria, espectacle,
-        isbn, lloc, idioma, llicencia
-      }`
-      const dades = await client.fetch(query)
-      setRecurs(dades)
+      setLoading(true)
+      try {
+        const savedFavs = localStorage.getItem('mercat_favorits')
+        if (savedFavs) setFavorits(JSON.parse(savedFavs))
+
+        const query = `{
+          "recursos": *[_type == "recurs"] | order(titol asc) {
+            _id, titol, autor, any, editorial, tipus,
+            conceptes, enllacos, categoria, espectacle,
+            isbn, lloc, idioma, llicencia, imatge
+          },
+          "configuracio": *[_type == "espectacle"] {
+            titol, actiu
+          }
+        }`
+        
+        const dades = await client.fetch(query)
+        setRecurs(dades.recursos || [])
+        setEstatsEspectacles(dades.configuracio || [])
+      } catch (error) {
+        console.error("Error carregant dades:", error)
+      } finally {
+        setTimeout(() => setLoading(false), 300)
+      }
     }
     fetchDades()
   }, [])
 
-  // 2. Lògica de Filtratge i llistes úniques [cite: 11, 12, 13, 14]
-  const { llistaEspectacles, llistaTemes, llistaTipus, recursosFiltrats } = useMemo(() => {
+  const toggleFavorite = (id) => {
+    let nousFavorits, missatge
+    if (favorits.includes(id)) {
+      nousFavorits = favorits.filter(fId => fId !== id)
+      missatge = "Eliminat dels favorits"
+    } else {
+      nousFavorits = [...favorits, id]
+      missatge = "Afegit als favorits"
+    }
+    setFavorits(nousFavorits)
+    localStorage.setItem('mercat_favorits', JSON.stringify(nousFavorits))
+    setToast({ show: true, message: missatge })
+    setTimeout(() => setToast({ show: false, message: '' }), 2000)
+  }
+
+  const handleModeFavorits = () => {
+    const nouEstat = !veureFavorits
+    setVeureFavorits(nouEstat)
+    if (nouEstat) {
+      updateQuery({ context: null, tipus: null, q: null })
+      setContextActiu('HOME') 
+      setFiltreText('')
+    }
+  }
+
+  const handleContextChange = (nouContext) => {
+    setContextActiu(nouContext)
+    setVeureFavorits(false) 
+    updateQuery({ context: nouContext === 'HOME' ? null : nouContext })
+  }
+
+  const handleTipusChange = (nouTipus) => {
+    setTipusActiu(nouTipus)
+    updateQuery({ tipus: nouTipus })
+  }
+
+  const handleSearch = (e) => {
+    const text = e.target.value
+    setFiltreText(text)
+    const timeoutId = setTimeout(() => updateQuery({ q: text }), 500)
+    return () => clearTimeout(timeoutId)
+  }
+
+  const resetAll = () => {
+    setContextActiu('HOME') 
+    setTipusActiu('Tots')
+    setFiltreText('')
+    setVeureFavorits(false)
+    updateQuery({ context: null, tipus: null, q: null })
+  }
+
+  // --- LÒGICA DE CLASSIFICACIÓ I FILTRATGE ---
+  const { espectaclesActius, espectaclesArxiu, llistaTemes, llistaTipus, recursosFiltrats } = useMemo(() => {
     const totsContextos = new Set()
     const totsTipus = new Set()
 
     recursos.forEach(r => {
-      const context = r.espectacle || r.categoria
-      if (context) totsContextos.add(context.trim())
+      // Recollim tots els possibles contextos (noms llargs, curts, categories...)
+      if (r.espectacle) {
+        const esp = r.espectacle.trim()
+        if (!BLACKLIST.includes(esp.toLowerCase())) totsContextos.add(esp)
+      }
+      if (r.categoria) {
+        const cat = r.categoria.trim()
+        if (!BLACKLIST.includes(cat.toLowerCase())) totsContextos.add(cat)
+      }
       if (r.tipus) totsTipus.add(r.tipus)
     })
 
     const esTemaGeneral = (text) => TEMES_GENERALS.includes(text.toLowerCase())
+    const totsPossiblesNoms = Array.from(totsContextos).filter(c => !esTemaGeneral(c)).sort()
+    
+    // 1. OBTENIR ELS ACTIUS DIRECTAMENT DE SANITY (ESTRICTE)
+    // Això evita duplicats. Només sortiran els que tu has creat a "Gestió Espectacles".
+    const llistaActius = estatsEspectacles
+      ?.filter(e => e.actiu)
+      .map(e => e.titol) || []
 
-    const espectacles = Array.from(totsContextos).filter(c => !esTemaGeneral(c)).sort()
-    const temes = Array.from(totsContextos).filter(c => esTemaGeneral(c)).sort()
-    const tipusOrdenats = Array.from(totsTipus).sort()
+    // Creem una llista de "Slugs Actius" per saber què hem de filtrar de l'arxiu
+    const slugsActius = llistaActius.map(nom => createSlug(nom))
+    
+    // 2. CALCULAR L'ARXIU
+    // L'arxiu és tot allò que trobem als recursos que NO coincideix amb cap actiu
+    const llistaArxiu = []
+    
+    totsPossiblesNoms.forEach(nom => {
+      // Si el nom (normalitzat) NO està a la llista d'actius (normalitzada), és arxiu.
+      // Així "Cometa" (curt) no anirà a l'arxiu si "Cometa - Roser..." està actiu, 
+      // perquè compartiran part de l'slug o ho podem gestionar.
+      
+      // PERFECCIONAMENT: Si el nom normalitzat està contingut dins d'un actiu, o viceversa, l'ignorem de l'arxiu
+      // per evitar que "Cometa" surti a l'arxiu quan "Cometa Roser" és actiu.
+      const slugNom = createSlug(nom)
+      const esActiu = slugsActius.some(slugActiu => slugActiu.includes(slugNom) || slugNom.includes(slugActiu))
 
+      if (!esActiu) {
+        llistaArxiu.push(nom)
+      }
+    })
+
+    const llistaTemesFinal = Array.from(totsContextos).filter(c => esTemaGeneral(c)).sort()
+    const llistaTipusFinal = Array.from(totsTipus).sort()
+
+    // 3. FILTRATGE DE RECURSOS (INTEL·LIGENT)
     let resultats = recursos
-
-    if (contextActiu !== 'Tots') {
-      resultats = resultats.filter(r => 
-        (r.espectacle && r.espectacle.trim() === contextActiu) || 
-        (r.categoria && r.categoria.trim() === contextActiu)
-      )
+    if (veureFavorits) {
+      resultats = resultats.filter(r => favorits.includes(r._id))
+    } else {
+      if (contextActiu !== 'HOME' && contextActiu !== 'Tots') {
+        // Normalitzem el que l'usuari ha clicat
+        const slugContext = createSlug(contextActiu)
+        
+        resultats = resultats.filter(r => {
+          const slugEspectacle = createSlug(r.espectacle)
+          const slugCategoria = createSlug(r.categoria)
+          
+          // Comparem de forma laxa: Si conté el text, és match.
+          // Això fa que si cliques "HEKA - GANDINI", trobi els recursos que diuen només "HEKA".
+          return (slugEspectacle && slugEspectacle.includes(slugContext)) || 
+                 (slugContext && slugContext.includes(slugEspectacle)) ||
+                 (slugCategoria && slugCategoria.includes(slugContext)) ||
+                 (slugContext && slugContext.includes(slugCategoria))
+        })
+      }
     }
 
     if (tipusActiu !== 'Tots') {
@@ -177,23 +322,23 @@ export default function Home() {
     }
 
     if (filtreText) {
-      const text = filtreText.toLowerCase()
+      const text = createSlug(filtreText) // També normalitzem la cerca
       resultats = resultats.filter(r => 
-        r.titol?.toLowerCase().includes(text) ||
-        r.autor?.toLowerCase().includes(text) ||
-        r.conceptes?.some(c => c.toLowerCase().includes(text))
+        createSlug(r.titol).includes(text) ||
+        createSlug(r.autor).includes(text) ||
+        r.conceptes?.some(c => createSlug(c).includes(text))
       )
     }
 
     return { 
-      llistaEspectacles: espectacles, 
-      llistaTemes: temes, 
-      llistaTipus: tipusOrdenats,
+      espectaclesActius: llistaActius, 
+      espectaclesArxiu: llistaArxiu, 
+      llistaTemes: llistaTemesFinal, 
+      llistaTipus: llistaTipusFinal, 
       recursosFiltrats: resultats 
     }
-  }, [recursos, contextActiu, tipusActiu, filtreText])
+  }, [recursos, contextActiu, tipusActiu, filtreText, veureFavorits, favorits, estatsEspectacles])
 
-  // 3. Funció per obtenir icones segons el tipus [cite: 14, 15]
   const getIcon = (tipus) => {
     const t = tipus?.toLowerCase() || ''
     if (t.includes('vídeo')) return <Video size={16} />
@@ -204,165 +349,173 @@ export default function Home() {
     return <BookOpen size={16} />
   }
 
-  const netejarFiltres = () => {
-    setContextActiu('Tots')
-    setTipusActiu('Tots')
-    setFiltreText('')
-  }
+  const isHomeView = contextActiu === 'HOME' && !filtreText && !veureFavorits
 
   return (
     <div className="min-h-screen bg-background text-foreground font-sans transition-colors duration-300">
       
-      {/* HEADER: Gestiona el logo swap i el reset [cite: 15, 16] */}
-      <HeaderMercat onReset={netejarFiltres} />
+      <HeaderMercat onReset={resetAll} />
+      <Toast isVisible={toast.show} message={toast.message} />
 
-      <main className="pt-32 pb-24 px-5 max-w-6xl mx-auto">
+      <main className="pt-36 lg:pt-48 pb-24 px-5 max-w-6xl mx-auto">
         
-        {/* LAYOUT PRINCIPAL: 1 columna mòbil, 2 columnes Desktop (Sidebar + Contingut) */}
-        <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-10">
-          
-          {/* BARRA LATERAL (FILTRES) - Sticky a Desktop */}
-          <aside className="space-y-8 lg:sticky lg:top-32 lg:h-fit">
+        <SearchBar 
+          text={filtreText} 
+          setText={handleSearch}
+          favoritsCount={favorits.length}
+          veureFavorits={veureFavorits}
+          setVeureFavorits={handleModeFavorits}
+          totalRecursos={recursosFiltrats.length}
+          isHome={isHomeView}
+        />
+
+        <div className="mt-8">
+          {loading ? (
+            <SkeletonList />
+          ) : isHomeView ? (
             
-            {/* CERCADOR */}
-            <div className="relative">
-              <input 
-                type="text" 
-                placeholder="Busca títol, autor..." 
-                className="w-full bg-card border border-border rounded-xl py-3 pl-11 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-accent transition-all shadow-sm"
-                value={filtreText}
-                onChange={(e) => setFiltreText(e.target.value)}
-              />
-              <Search className="absolute left-4 top-3.5 text-muted" size={18} />
-            </div>
+            <HomeSelector 
+              espectacles={espectaclesActius}
+              temes={llistaTemes}
+              arxiu={espectaclesArxiu} 
+              onSelect={(val) => handleContextChange(val)}
+            />
 
-            {/* FILTRE ESPECTACLES */}
-            <div>
-              <h3 className="text-[10px] font-bold text-muted uppercase tracking-widest mb-4 px-1">Espectacles</h3>
-              <div className="flex flex-wrap lg:flex-col gap-2">
+          ) : (
+            
+            <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              
+              <aside className="space-y-8 lg:sticky lg:top-48 lg:h-fit z-20">
+                
                 <button
-                  onClick={() => setContextActiu('Tots')}
-                  className={`px-4 py-2 rounded-lg text-[11px] font-bold uppercase transition-all border text-left
-                    ${contextActiu === 'Tots' 
-                      ? 'bg-accent text-background border-accent shadow-md' 
-                      : 'bg-card text-foreground border-border hover:border-muted'}`}
-                >Tots</button>
-                {llistaEspectacles.map((esp, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setContextActiu(esp)}
-                    className={`px-4 py-2 rounded-lg text-[11px] font-bold uppercase transition-all border text-left
-                      ${contextActiu === esp 
-                        ? 'bg-accent text-background border-accent shadow-md' 
-                        : 'bg-card text-foreground border-border hover:border-muted'}`}
-                  >{esp}</button>
-                ))}
-              </div>
-            </div>
-
-            {/* FILTRE TEMES GENERALS */}
-            <div>
-              <h3 className="text-[10px] font-bold text-muted uppercase tracking-widest mb-4 px-1">Temes</h3>
-              <div className="flex flex-wrap gap-2">
-                {llistaTemes.map((tema, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setContextActiu(tema)}
-                    className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase border transition-all
-                      ${contextActiu === tema 
-                        ? 'bg-muted text-background border-muted' 
-                        : 'bg-card text-muted border-border hover:border-muted'}`}
-                  >{tema}</button>
-                ))}
-              </div>
-            </div>
-          </aside>
-
-          {/* COLUMNA DE RESULTATS */}
-          <section>
-            {/* BARRA SUPERIOR DE TIPUS (Sticky en scroll) [cite: 32] */}
-            <div className="flex items-center justify-between mb-6 border-b border-border pb-4">
-               <h2 className="text-[10px] font-bold text-muted uppercase tracking-widest">
-                 {recursosFiltrats.length} Recursos
-               </h2>
-               <div className="flex gap-2 overflow-x-auto no-scrollbar max-w-[240px] md:max-w-none">
-                  <button
-                    onClick={() => setTipusActiu('Tots')}
-                    className={`whitespace-nowrap px-3 py-1 rounded-full text-[10px] font-bold uppercase border transition-all
-                      ${tipusActiu === 'Tots' ? 'bg-accent text-background border-accent' : 'bg-card border-border'}`}
-                  >Tots</button>
-                  {llistaTipus.map((tipus, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setTipusActiu(tipus)}
-                      className={`whitespace-nowrap px-3 py-1 flex items-center gap-2 rounded-full text-[10px] font-bold uppercase border transition-all
-                        ${tipusActiu === tipus ? 'bg-accent text-background border-accent' : 'bg-card border-border hover:border-muted'}`}
-                    >
-                      {getIcon(tipus)}
-                      {tipus}
-                    </button>
-                  ))}
-               </div>
-            </div>
-
-            {/* LLISTA DE TARGETES (GRID) [cite: 38] */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-h-[50vh]">
-              {recursosFiltrats.map((recurs) => (
-                <div 
-                  key={recurs._id}
-                  onClick={() => setRecursSeleccionat(recurs)}
-                  className="bg-card p-5 rounded-2xl border border-border shadow-sm active:scale-[0.985] hover:border-muted transition-all cursor-pointer flex flex-col justify-between group"
+                  onClick={() => handleContextChange('HOME')}
+                  className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-muted hover:text-foreground transition-colors group mb-6"
                 >
-                  <div>
-                    <div className="flex items-center gap-2 mb-3">
-                       <span className="text-muted">{getIcon(recurs.tipus)}</span>
-                       <span className="text-[10px] font-bold uppercase text-muted tracking-widest">
-                         {recurs.tipus}
-                       </span>
-                    </div>
+                  <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" />
+                  Tornar a l'inici
+                </button>
+
+                {/* 1. ESPECTACLES */}
+                <div>
+                  <h3 className="text-[10px] font-bold text-muted uppercase tracking-widest mb-4 px-1">Espectacles</h3>
+                  <div className="flex flex-col gap-2">
                     
-                    <h4 className="font-bold text-lg leading-tight group-hover:text-accent transition-colors">
-                      {recurs.titol}
-                    </h4>
-                    {recurs.autor && (
-                      <p className="text-sm text-muted mt-2 italic line-clamp-1">{recurs.autor}</p>
+                    <button
+                      onClick={() => handleContextChange('Tots')}
+                      className={`w-full px-4 py-3 rounded-xl text-[11px] font-bold uppercase transition-all border text-left flex justify-between items-center group
+                        ${contextActiu === 'Tots' 
+                          ? 'bg-foreground text-background border-foreground shadow-lg' 
+                          : 'bg-card text-foreground border-border hover:border-muted'}`}
+                    >
+                      <span>Tots els recursos</span>
+                      {contextActiu === 'Tots' && <span className="h-1.5 w-1.5 bg-background rounded-full" />}
+                    </button>
+
+                    {espectaclesActius.map((esp, i) => (
+                      <button
+                        key={i}
+                        onClick={() => handleContextChange(esp)}
+                        className={`w-full px-4 py-3 rounded-xl text-[11px] font-bold uppercase transition-all border text-left relative overflow-hidden
+                          ${contextActiu === esp 
+                            ? 'bg-accent text-background border-accent shadow-md' 
+                            : 'bg-card text-foreground border-border hover:border-muted hover:bg-accent/5'}`}
+                      >
+                         {esp}
+                      </button>
+                    ))}
+
+                    {espectaclesArxiu.length > 0 && (
+                      <div className="relative mt-2 group">
+                        <select 
+                          onChange={(e) => handleContextChange(e.target.value)}
+                          className={`w-full appearance-none bg-transparent border border-dashed text-muted hover:text-foreground hover:border-muted rounded-xl px-4 py-2.5 text-[11px] font-bold uppercase cursor-pointer focus:outline-none transition-colors
+                            ${espectaclesArxiu.includes(contextActiu) ? 'border-accent text-accent' : 'border-border/60 text-muted/80'}`}
+                          value={espectaclesArxiu.includes(contextActiu) ? contextActiu : ""}
+                        >
+                          <option value="" disabled>Arxiu d'espectacles passats</option>
+                          {espectaclesArxiu.map((esp, i) => (
+                            <option key={i} value={esp}>{esp}</option>
+                          ))}
+                        </select>
+                        <div className={`absolute right-3 top-3 pointer-events-none group-hover:text-muted ${espectaclesArxiu.includes(contextActiu) ? 'text-accent' : 'text-muted/60'}`}>
+                          <ChevronDown size={14} />
+                        </div>
+                      </div>
                     )}
                   </div>
+                </div>
 
-                  <div className="mt-6 flex items-center justify-between">
-                    <span className="text-[10px] font-bold uppercase text-muted/60">
-                      {recurs.espectacle || recurs.categoria}
-                    </span>
-                    <div className="text-muted group-hover:text-accent group-hover:translate-x-1 transition-all">
-                      <ArrowRight size={20} />
-                    </div>
+                {/* 2. TEMES */}
+                <div>
+                  <h3 className="text-[10px] font-bold text-muted uppercase tracking-widest mb-4 px-1">Temes Transversals</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {llistaTemes.map((tema, i) => (
+                      <button
+                        key={i}
+                        onClick={() => handleContextChange(tema)}
+                        className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase border transition-all
+                          ${contextActiu === tema 
+                            ? 'bg-muted text-background border-muted' 
+                            : 'bg-card text-muted border-border hover:border-muted hover:bg-accent/5'}`}
+                      >{tema}</button>
+                    ))}
                   </div>
                 </div>
-              ))}
+              </aside>
 
-              {/* ESTAT BUIT [cite: 42, 43] */}
-              {recursosFiltrats.length === 0 && (
-                <div className="col-span-full py-20 text-center flex flex-col items-center opacity-40">
-                  <Search size={48} className="mb-4" />
-                  <p className="text-sm font-medium">No s'han trobat resultats.</p>
-                  <button onClick={netejarFiltres} className="mt-4 text-xs font-bold underline uppercase tracking-widest">
-                    Netejar tots els filtres
-                  </button>
+              <section>
+                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar mb-6 pb-2 mask-linear-fade">
+                   <button
+                     onClick={() => handleTipusChange('Tots')}
+                     className={`whitespace-nowrap px-3 py-1 rounded-full text-[10px] font-bold uppercase border transition-all
+                       ${tipusActiu === 'Tots' ? 'bg-accent text-background border-accent' : 'bg-card border-border hover:border-muted'}`}
+                   >Tots</button>
+                   {llistaTipus.map((tipus, i) => (
+                     <button
+                       key={i}
+                       onClick={() => handleTipusChange(tipus)}
+                       className={`whitespace-nowrap px-3 py-1 flex items-center gap-2 rounded-full text-[10px] font-bold uppercase border transition-all
+                         ${tipusActiu === tipus ? 'bg-accent text-background border-accent' : 'bg-card border-border hover:border-muted'}`}
+                     >
+                       {getIcon(tipus)}
+                       {tipus}
+                     </button>
+                   ))}
                 </div>
-              )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-h-[50vh] items-stretch">
+                  <AnimatePresence mode="popLayout">
+                    {recursosFiltrats.map((recurs) => (
+                      <motion.div 
+                        key={recurs._id} 
+                        initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9 }}
+                        layout className="h-full"
+                      >
+                        <ResourceCard 
+                          recurs={recurs} getIcon={getIcon} onClick={() => setRecursSeleccionat(recurs)}
+                          isFavorite={favorits.includes(recurs._id)} onToggleFavorite={toggleFavorite}
+                        />
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+
+                  {recursosFiltrats.length === 0 && (
+                    <div className="col-span-full py-24 text-center opacity-60">
+                      <p className="text-sm font-bold mb-4">No s'han trobat resultats.</p>
+                      <button onClick={resetAll} className="text-xs font-bold underline uppercase tracking-widest hover:text-accent">
+                        Tornar a l'inici
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </section>
             </div>
-          </section>
+          )}
         </div>
       </main>
 
-      {/* COMPONENT DE DETALL (RESOURCE SHEET) [cite: 45] */}
-      {/* S'encarrega de mostrar la fitxa en mode Bottom Sheet (mòbil) o Panell Lateral (Desktop) */}
-      <ResourceSheet 
-        recurs={recursSeleccionat} 
-        isOpen={!!recursSeleccionat} 
-        onClose={() => setRecursSeleccionat(null)} 
-      />
-      
+      <ResourceSheet recurs={recursSeleccionat} isOpen={!!recursSeleccionat} onClose={() => setRecursSeleccionat(null)} />
+      <ScrollToTop />
     </div>
   )
 }
@@ -383,40 +536,184 @@ export default function HeaderMercat({ onReset }) {
     return () => window.removeEventListener('scroll', handleScroll)
   }, [])
 
-  const LOGO_FULL = "/logo-mercat.png"
-  const LOGO_COMPACT = "/logo_mercat_no_rodones.png"
+  // Centrem les imatges dins del quadrat
+  const imgClass = "absolute inset-0 w-full h-full object-contain object-center transition-opacity duration-500"
 
   return (
-    <header className={`fixed top-0 inset-x-0 z-40 transition-all duration-300 glass-effect border-b border-border ${
-      scrolled ? 'py-2 bg-background/80' : 'py-5 bg-background'
-    }`}>
-      <div className="px-5 max-w-6xl mx-auto flex items-center gap-4 cursor-pointer" onClick={onReset}>
-        <div className="relative h-12 w-12 flex items-center justify-center">
-          {/* Logo Swap amb transició d'opacitat */}
-          <img 
-            src={LOGO_FULL} 
-            alt="Mercat Full" 
-            className={`absolute transition-opacity duration-300 object-contain h-full ${scrolled ? 'opacity-0' : 'opacity-100'}`}
-          />
-          <img 
-            src={LOGO_COMPACT} 
-            alt="Mercat Compact" 
-            className={`absolute transition-opacity duration-300 object-contain h-8 ${scrolled ? 'opacity-100' : 'opacity-0'}`}
-          />
+    <header 
+      className={`fixed top-0 inset-x-0 z-50 transition-all duration-500 ease-in-out border-b ${
+        scrolled 
+          ? 'py-3 bg-background/95 backdrop-blur-md border-border shadow-sm' 
+          : 'py-6 bg-background border-transparent'
+      }`}
+    >
+      <div 
+        className="px-5 max-w-6xl mx-auto flex items-center cursor-pointer group" 
+        onClick={onReset}
+      >
+        
+        {/* 1. LOGO CONTAINER (SEMPRE QUADRAT) */}
+        {/* 
+            Gran: h-24 w-24 (96px)
+            Petit (Scroll): h-12 w-12 (48px)
+            El contenidor sempre és quadrat, només canvia de mida.
+        */}
+        <div className={`relative transition-all duration-500 flex-shrink-0 ${
+          scrolled ? 'h-12 w-12' : 'h-16 w-16 lg:h-24 lg:w-24' 
+        }`}>
+          
+          {/* --- MODE CLAR (LIGHT) --- */}
+          <div className="dark:hidden contents">
+            {/* Imatge A: Amb rodones (Visible a dalt) */}
+            <img 
+              src="/logo-mercat.png" 
+              alt="Mercat Logo Full" 
+              className={`${imgClass} ${scrolled ? 'opacity-0 scale-75' : 'opacity-100 scale-100'}`}
+            />
+            {/* Imatge B: Sense rodones (Visible a l'scroll) */}
+            <img 
+              src="/logo_mercat_no_rodones.png" 
+              alt="Mercat Logo Compact" 
+              className={`${imgClass} ${scrolled ? 'opacity-100 scale-100' : 'opacity-0 scale-125'}`}
+            />
+          </div>
+
+          {/* --- MODE FOSC (DARK) --- */}
+          <div className="hidden dark:contents">
+            {/* Imatge A Dark */}
+            <img 
+              src="/logo_mercat_rodones.png" 
+              alt="Mercat Logo Full Dark" 
+              className={`${imgClass} ${scrolled ? 'opacity-0 scale-75' : 'opacity-100 scale-100'}`}
+            />
+            {/* Imatge B Dark */}
+            <img 
+              src="/logo_mercat_no_rodones_blanc.png" 
+              alt="Mercat Logo Compact Dark" 
+              className={`${imgClass} ${scrolled ? 'opacity-100 scale-100' : 'opacity-0 scale-125'}`}
+            />
+          </div>
         </div>
         
-        <div className="flex flex-col">
-          <h1 className={`font-bold uppercase tracking-tighter transition-all duration-300 ${scrolled ? 'text-lg' : 'text-2xl'}`}>
+        {/* 2. LÍNIA SEPARADORA */}
+        <div className={`w-px bg-foreground/20 mx-4 transition-all duration-500 ${
+          scrolled ? 'h-8 opacity-0 mx-0 w-0' : 'h-16 opacity-100'
+        }`} />
+
+        {/* 3. TEXT */}
+        <div className={`flex flex-col justify-center transition-all duration-500 ${scrolled ? '-translate-x-2' : 'translate-x-0'}`}>
+          <h1 className={`font-bold uppercase tracking-tighter leading-none transition-all duration-500 ${
+            scrolled ? 'text-lg' : 'text-2xl lg:text-3xl'
+          }`}>
             Aprofundir
           </h1>
-          <p className={`text-muted text-[10px] uppercase tracking-widest font-medium overflow-hidden transition-all duration-300 ${
-            scrolled ? 'h-0 opacity-0' : 'h-4 opacity-100'
+          
+          <div className={`overflow-hidden transition-all duration-500 ease-in-out ${
+            scrolled ? 'max-h-0 opacity-0 mt-0' : 'max-h-24 opacity-100 mt-2'
           }`}>
-            Mercat de les Flors
-          </p>
+            <p className="text-[10px] uppercase tracking-widest font-medium leading-tight text-muted max-w-[240px] lg:max-w-[380px]">
+              Recursos per continuar explorant els espectacles de la programació familiar.
+            </p>
+          </div>
         </div>
       </div>
     </header>
+  )
+}
+
+==================================================
+ ARXIU: src/components/HomeSelector.jsx
+==================================================
+
+'use client'
+import { motion } from 'framer-motion'
+import { ArrowRight, Sparkles, Grid, Archive } from 'lucide-react'
+
+export default function HomeSelector({ espectacles, temes, arxiu, onSelect }) {
+  return (
+    <div className="space-y-12 py-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
+      
+      {/* 1. ESPECTACLES ACTIUS */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 mb-6">
+          <Sparkles className="text-accent" size={20} />
+          <h2 className="text-sm font-bold uppercase tracking-widest text-muted">
+            Què has vingut a veure?
+          </h2>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
+          {espectacles.map((esp, i) => (
+            <motion.button
+              key={i}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => onSelect(esp)}
+              className="group relative min-h-[140px] h-full w-full bg-card hover:bg-foreground hover:text-background border border-border rounded-3xl p-6 flex flex-col justify-between text-left transition-all shadow-sm hover:shadow-2xl"
+            >
+              <span className="font-bold text-xl md:text-2xl uppercase tracking-tight leading-none max-w-[85%] mb-4">
+                {esp}
+              </span>
+              <div className="self-end bg-accent/10 group-hover:bg-background/20 p-2 rounded-full transition-colors">
+                <ArrowRight size={24} />
+              </div>
+            </motion.button>
+          ))}
+        </div>
+      </div>
+
+      {/* 2. TEMES + VEURE TOT */}
+      <div className="space-y-6 border-t border-border/50 pt-10">
+        {/* --- AQUÍ ÉS EL CANVI --- */}
+        <h2 className="text-xs font-bold uppercase tracking-widest text-muted">
+          Temes Transversals
+        </h2>
+        {/* ----------------------- */}
+        
+        <div className="flex flex-wrap gap-3 items-center">
+          {temes.map((tema, i) => (
+            <button
+              key={i}
+              onClick={() => onSelect(tema)}
+              className="px-5 py-2.5 bg-card hover:bg-accent hover:text-white border border-border rounded-full text-xs font-bold uppercase tracking-wide transition-all shadow-sm active:scale-95"
+            >
+              {tema}
+            </button>
+          ))}
+
+          <div className="h-8 w-px bg-border mx-2 hidden md:block" />
+
+          <button
+            onClick={() => onSelect('Tots')}
+            className="flex items-center gap-2 px-5 py-2.5 bg-foreground text-background border border-foreground rounded-full text-xs font-bold uppercase tracking-wide transition-all shadow-md hover:scale-105 active:scale-95"
+          >
+            <Grid size={14} />
+            Veure-ho tot
+          </button>
+        </div>
+      </div>
+
+      {/* 3. ARXIU D'ESPECTACLES PASSATS */}
+      {arxiu && arxiu.length > 0 && (
+        <div className="pt-8 mt-4 border-t border-border/50 opacity-80 hover:opacity-100 transition-opacity">
+          <div className="relative group w-full md:w-auto inline-block">
+            <select 
+              onChange={(e) => onSelect(e.target.value)}
+              className="appearance-none bg-muted/10 hover:bg-muted/20 border border-transparent hover:border-muted text-muted-foreground rounded-xl pl-4 pr-10 py-3 text-xs font-bold uppercase cursor-pointer focus:outline-none transition-all w-full md:w-auto"
+              defaultValue=""
+            >
+              <option value="" disabled>Consultar espectacles anteriors</option>
+              {arxiu.map((esp, i) => (
+                <option key={i} value={esp}>{esp}</option>
+              ))}
+            </select>
+            <div className="absolute right-3 top-3 pointer-events-none text-muted-foreground">
+              <Archive size={16} />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -425,23 +722,35 @@ export default function HeaderMercat({ onReset }) {
 ==================================================
 
 'use client'
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, Heart } from 'lucide-react'
 
-export default function ResourceCard({ recurs, onClick, getIcon }) {
+export default function ResourceCard({ 
+  recurs, 
+  onClick, 
+  getIcon, 
+  isFavorite, 
+  onToggleFavorite 
+}) {
   
-  const handleInteraction = () => {
-    // 1. Feedback hàptic: vibració suau de 8ms
+  const handleCardClick = () => {
     if (typeof window !== 'undefined' && navigator.vibrate) {
       navigator.vibrate(8);
     }
-    // 2. Executar l'acció d'obrir el recurs
     onClick();
+  }
+
+  const handleFavoriteClick = (e) => {
+    e.stopPropagation(); 
+    if (typeof window !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate([5, 30, 5]); 
+    }
+    onToggleFavorite(recurs._id);
   }
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      handleInteraction();
+      handleCardClick();
     }
   }
 
@@ -449,30 +758,53 @@ export default function ResourceCard({ recurs, onClick, getIcon }) {
     <div 
       role="button" 
       tabIndex={0} 
-      onClick={handleInteraction}
+      onClick={handleCardClick}
       onKeyDown={handleKeyDown}
       aria-label={`Veure detalls de ${recurs.titol}`}
-      className="bg-card p-5 rounded-2xl border border-border shadow-sm active:scale-[0.985] hover:border-muted transition-all cursor-pointer flex flex-col justify-between group focus-visible:ring-2 focus-visible:ring-accent"
+      // AFEGIT: h-full per omplir alçada i flex-col per estirar el contingut
+      className="group relative bg-card p-5 rounded-2xl border border-border shadow-sm active:scale-[0.985] hover:border-muted transition-all cursor-pointer flex flex-col justify-between h-full focus-visible:ring-2 focus-visible:ring-accent overflow-hidden"
     >
-      <div>
+      
+      {/* BOTÓ DE FAVORIT */}
+      <button 
+        onClick={handleFavoriteClick}
+        className="absolute top-4 right-4 p-2.5 rounded-full z-20 hover:bg-muted/10 active:scale-90 transition-all focus:outline-none focus:ring-2 focus:ring-red-200"
+        title={isFavorite ? "Treure de favorits" : "Guardar a favorits"}
+      >
+        <Heart 
+          size={20} 
+          className={`transition-all duration-300 ${
+            isFavorite 
+              ? 'fill-red-500 text-red-500 scale-110' 
+              : 'text-muted/60 hover:text-red-400'
+          }`} 
+        />
+      </button>
+
+      {/* PART SUPERIOR (Icona + Títol + Autor) */}
+      <div className="pr-8 flex-1"> 
         <div className="flex items-center gap-2 mb-3 text-muted">
            {getIcon(recurs.tipus)}
-           <span className="text-[10px] font-bold uppercase tracking-widest">{recurs.tipus}</span>
+           <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">{recurs.tipus}</span>
         </div>
         
-        <h4 className="font-bold text-lg leading-tight group-hover:text-accent transition-colors">
+        {/* AFEGIT: line-clamp-3 limita el títol a 3 línies màxim */}
+        <h4 className="font-bold text-lg leading-tight group-hover:text-accent transition-colors line-clamp-3 mb-2">
           {recurs.titol}
         </h4>
+        
         {recurs.autor && (
-          <p className="text-sm text-muted mt-2 italic line-clamp-1">{recurs.autor}</p>
+          <p className="text-sm text-muted italic line-clamp-1">{recurs.autor}</p>
         )}
       </div>
 
-      <div className="mt-6 flex items-center justify-between">
-        <span className="text-[10px] font-bold uppercase text-muted/60">
+      {/* PART INFERIOR (Categoria + Fletxa) */}
+      {/* AFEGIT: mt-auto empeny això cap a baix del tot */}
+      <div className="mt-6 flex items-center justify-between pt-4 border-t border-border/30 w-full mt-auto">
+        <span className="text-[10px] font-bold uppercase text-muted/60 line-clamp-1 max-w-[70%]">
           {recurs.espectacle || recurs.categoria}
         </span>
-        <div className="text-muted group-hover:text-accent group-hover:translate-x-1 transition-all">
+        <div className="text-muted group-hover:text-accent group-hover:translate-x-1 transition-transform duration-300">
           <ArrowRight size={20} />
         </div>
       </div>
@@ -486,15 +818,35 @@ export default function ResourceCard({ recurs, onClick, getIcon }) {
 
 'use client'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, ExternalLink, BookOpen, Video, Film, FileText, Quote, Mic } from 'lucide-react'
+import { X, ExternalLink, BookOpen, Video, Film, FileText, Quote, Mic, Share2, Check } from 'lucide-react'
+import { useState } from 'react'
+import { urlFor } from '@/sanity' // <--- IMPORTANT: Importem el helper d'imatges
 
 export default function ResourceSheet({ recurs, isOpen, onClose }) {
+  const [copied, setCopied] = useState(false)
+
   if (!recurs) return null;
 
-  // Funció per vibrar en clicar enllaços externs
+  // Lògica de Compartir
+  const handleShare = () => {
+    const shareData = {
+      title: recurs.titol,
+      text: `Mira aquest recurs del Mercat de les Flors: ${recurs.titol}`,
+      url: window.location.href 
+    }
+
+    if (navigator.share) {
+      navigator.share(shareData).catch((err) => console.log('Error compartint', err));
+    } else {
+      navigator.clipboard.writeText(`${shareData.title} - ${shareData.url}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }
+
   const handleLinkClick = () => {
     if (typeof window !== 'undefined' && navigator.vibrate) {
-      navigator.vibrate(10); // Una mica més forta per a l'acció final
+      navigator.vibrate(10);
     }
   }
 
@@ -512,6 +864,7 @@ export default function ResourceSheet({ recurs, isOpen, onClose }) {
     <AnimatePresence>
       {isOpen && (
         <>
+          {/* OVERLAY FOSC */}
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -520,82 +873,151 @@ export default function ResourceSheet({ recurs, isOpen, onClose }) {
             className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50"
           />
 
+          {/* PANEL LATERAL / BOTTOM SHEET */}
           <motion.div 
             initial={{ y: "100%" }}
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ type: "spring", damping: 25, stiffness: 200 }}
-            className="fixed bottom-0 inset-x-0 lg:inset-y-0 lg:right-0 lg:left-auto lg:w-[450px] bg-background z-50 shadow-2xl flex flex-col rounded-t-[32px] lg:rounded-l-[32px] lg:rounded-tr-none border-t lg:border-t-0 lg:border-l border-border"
+            className="fixed bottom-0 inset-x-0 lg:inset-y-0 lg:right-0 lg:left-auto lg:w-[500px] bg-background z-50 shadow-2xl flex flex-col rounded-t-[32px] lg:rounded-l-[32px] lg:rounded-tr-none border-t lg:border-t-0 lg:border-l border-border max-h-[95vh] lg:max-h-full"
           >
-            <div className="h-1.5 w-12 bg-border rounded-full mx-auto mt-3 lg:hidden" />
+            {/* Tirador per a mòbil (a sobre de tot) */}
+            <div className="h-1.5 w-12 bg-border/60 rounded-full mx-auto mt-4 mb-1 lg:hidden flex-shrink-0 z-20 relative" />
 
-            <div className="flex-1 overflow-y-auto p-6 lg:p-10">
-              <div className="flex justify-between items-start mb-8">
-                <div className="flex flex-wrap gap-2">
-                  <span className="flex items-center gap-2 px-3 py-1 bg-card border border-border rounded-full text-[10px] font-bold uppercase text-muted">
-                    {getIcon(recurs.tipus)} {recurs.tipus}
-                  </span>
-                  {recurs.espectacle && (
-                    <span className="px-3 py-1 bg-accent text-background rounded-full text-[10px] font-bold uppercase">
-                      {recurs.espectacle}
+            <div className="flex-1 overflow-y-auto scroll-smooth">
+              
+              {/* --- 1. IMATGE DE PORTADA (NOU) --- */}
+              {/* Només es renderitza si el recurs té imatge a Sanity */}
+              {recurs.imatge && (
+                <div className="relative h-64 w-full bg-muted/10">
+                  <img 
+                    src={urlFor(recurs.imatge).width(800).url()} 
+                    alt={recurs.titol}
+                    className="w-full h-full object-cover"
+                  />
+                  {/* Petit gradient a baix per suavitzar la transició si fos necessari */}
+                  <div className="absolute inset-0 bg-gradient-to-t from-background/20 to-transparent" />
+                </div>
+              )}
+
+              <div className="p-6 lg:p-10">
+                
+                {/* CAPÇALERA AMB ACCIONS */}
+                <div className="flex justify-between items-start mb-8">
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <span className="flex items-center gap-2 px-3 py-1 bg-card border border-border rounded-full text-[10px] font-bold uppercase text-muted shadow-sm">
+                      {getIcon(recurs.tipus)} {recurs.tipus}
                     </span>
-                  )}
-                </div>
-                <button 
-                  onClick={onClose}
-                  className="p-2 hover:bg-card rounded-full transition-colors text-muted hover:text-foreground"
-                >
-                  <X size={24} />
-                </button>
-              </div>
-
-              <div className="space-y-6">
-                <div>
-                  <h2 className="text-3xl lg:text-4xl font-bold leading-tight mb-2">
-                    {recurs.titol}
-                  </h2>
-                  <p className="text-xl text-muted italic">{recurs.autor}</p>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4 py-6 border-y border-border">
-                  {recurs.editorial && (
-                    <div>
-                      <span className="block text-[10px] font-bold text-muted uppercase tracking-widest mb-1">Editorial</span>
-                      <p className="font-medium">{recurs.editorial}</p>
-                    </div>
-                  )}
-                  {recurs.any && (
-                    <div>
-                      <span className="block text-[10px] font-bold text-muted uppercase tracking-widest mb-1">Any</span>
-                      <p className="font-medium">{recurs.any}</p>
-                    </div>
-                  )}
+                    {recurs.espectacle && (
+                      <span className="px-3 py-1 bg-accent/5 text-accent border border-accent/20 rounded-full text-[10px] font-bold uppercase">
+                        {recurs.espectacle}
+                      </span>
+                    )}
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    {/* Botó Compartir */}
+                    <button 
+                      onClick={handleShare}
+                      className="p-2.5 hover:bg-card rounded-full transition-all text-muted hover:text-foreground border border-transparent hover:border-border"
+                      title="Compartir recurs"
+                    >
+                      {copied ? <Check size={20} className="text-green-600" /> : <Share2 size={20} />}
+                    </button>
+                    
+                    {/* Botó Tancar */}
+                    <button 
+                      onClick={onClose}
+                      className="p-2.5 bg-card hover:bg-muted/20 rounded-full transition-all text-foreground border border-border shadow-sm"
+                    >
+                      <X size={20} />
+                    </button>
+                  </div>
                 </div>
 
-                <div className="space-y-3 pt-4">
-                  {recurs.enllacos?.length > 0 ? (
-                    recurs.enllacos.map((link, i) => (
-                      <a 
-                        key={i} 
-                        href={link.url} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        onClick={handleLinkClick} // <--- AFEGIM VIBRACIÓ
-                        className="flex items-center justify-between w-full p-5 bg-accent text-background rounded-2xl font-bold text-sm hover:opacity-90 transition-all shadow-lg active:scale-[0.98]"
-                      >
-                        <span className="uppercase tracking-wide">{link.titol || 'Explorar recurs'}</span>
-                        <ExternalLink size={20} />
-                      </a>
-                    ))
-                  ) : (
-                    <div className="p-6 bg-card border border-border border-dashed rounded-2xl text-center">
-                      <p className="text-sm text-muted italic">Consulta a la biblioteca física.</p>
+                {/* CONTINGUT PRINCIPAL */}
+                <div className="space-y-8">
+                  <div>
+                    <h2 className="text-3xl lg:text-4xl font-bold leading-[1.1] mb-3 tracking-tight">
+                      {recurs.titol}
+                    </h2>
+                    <p className="text-xl text-muted italic font-serif">
+                      {recurs.autor}
+                    </p>
+                  </div>
+
+                  {/* METADATES (GRID) */}
+                  <div className="grid grid-cols-2 gap-6 p-5 bg-card/50 rounded-2xl border border-border/50">
+                    {recurs.editorial && (
+                      <div>
+                        <span className="block text-[10px] font-bold text-muted uppercase tracking-widest mb-1">Editorial</span>
+                        <p className="font-medium text-sm">{recurs.editorial}</p>
+                      </div>
+                    )}
+                    {recurs.any && (
+                      <div>
+                        <span className="block text-[10px] font-bold text-muted uppercase tracking-widest mb-1">Any</span>
+                        <p className="font-medium text-sm">{recurs.any}</p>
+                      </div>
+                    )}
+                    {recurs.lloc && (
+                      <div>
+                        <span className="block text-[10px] font-bold text-muted uppercase tracking-widest mb-1">Lloc</span>
+                        <p className="font-medium text-sm">{recurs.lloc}</p>
+                      </div>
+                    )}
+                    {recurs.idioma && (
+                      <div>
+                        <span className="block text-[10px] font-bold text-muted uppercase tracking-widest mb-1">Idioma</span>
+                        <p className="font-medium text-sm">{recurs.idioma}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ENLLAÇOS */}
+                  <div className="space-y-3 pt-2">
+                    <h3 className="text-[10px] font-bold text-muted uppercase tracking-widest mb-3">Accés al recurs</h3>
+                    {recurs.enllacos?.length > 0 ? (
+                      recurs.enllacos.map((link, i) => (
+                        <a 
+                          key={i} 
+                          href={link.url} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          onClick={handleLinkClick}
+                          className="group flex items-center justify-between w-full p-4 lg:p-5 bg-foreground text-background rounded-2xl font-bold text-sm hover:opacity-90 transition-all shadow-lg active:scale-[0.98]"
+                        >
+                          <span className="uppercase tracking-wide pr-4 truncate">
+                            {link.titol || 'Obrir recurs extern'}
+                          </span>
+                          <ExternalLink size={18} className="group-hover:translate-x-1 transition-transform" />
+                        </a>
+                      ))
+                    ) : (
+                      <div className="p-6 bg-card border border-border border-dashed rounded-2xl text-center">
+                        <BookOpen className="mx-auto mb-2 text-muted/50" size={24} />
+                        <p className="text-sm text-muted font-medium">Disponible per consulta a la biblioteca física.</p>
+                        <p className="text-xs text-muted/60 mt-1 uppercase tracking-wider">Mercat de les Flors</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* CONCEPTES / TAGS */}
+                  {recurs.conceptes && recurs.conceptes.length > 0 && (
+                    <div className="pt-6 border-t border-border">
+                      <h3 className="text-[10px] font-bold text-muted uppercase tracking-widest mb-4">Conceptes Clau</h3>
+                      <div className="flex flex-wrap gap-2">
+                        {recurs.conceptes.map((c, i) => (
+                          <span key={i} className="px-3 py-1.5 bg-card text-muted-foreground text-xs rounded-lg border border-border">
+                            #{c}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
               </div>
             </div>
-            <div className="h-8 lg:hidden" />
           </motion.div>
         </>
       )}
@@ -636,6 +1058,67 @@ export default function ScrollToTop() {
         </motion.button>
       )}
     </AnimatePresence>
+  )
+}
+
+==================================================
+ ARXIU: src/components/SearchBar.jsx
+==================================================
+
+'use client'
+import { Search, Heart, X } from 'lucide-react'
+
+export default function SearchBar({ 
+  text, setText, favoritsCount, veureFavorits, setVeureFavorits, totalRecursos, isHome 
+}) {
+  return (
+    <div className="sticky top-20 z-30 bg-background/80 backdrop-blur-xl py-4 -mx-5 px-5 md:mx-0 md:px-0 md:bg-transparent md:backdrop-blur-none transition-all">
+      {/* CANVI AQUI: Afegit 'mx-auto' al div flex */}
+      <div className="flex gap-3 max-w-2xl mx-auto">
+        
+        <div className="relative flex-1 group">
+          <input 
+            type="text" 
+            placeholder="Cerca per títol, autor o concepte..." 
+            className="w-full h-12 bg-card border border-border rounded-2xl pl-11 pr-10 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-foreground/10 transition-shadow shadow-sm"
+            value={text}
+            onChange={setText}
+          />
+          <Search className="absolute left-4 top-3.5 text-muted group-focus-within:text-foreground transition-colors" size={18} />
+          {text && (
+            <button onClick={() => setText('')} className="absolute right-3 top-3 p-1 hover:bg-muted/20 rounded-full text-muted hover:text-foreground transition-all">
+               <X size={16} />
+            </button>
+          )}
+        </div>
+
+        <button
+          onClick={setVeureFavorits}
+          className={`h-12 px-5 rounded-2xl border transition-all flex items-center gap-2 group relative font-bold text-xs uppercase tracking-wider
+            ${veureFavorits 
+              ? 'bg-red-500 border-red-500 text-white shadow-lg shadow-red-500/20' 
+              : 'bg-card border-border text-muted hover:border-red-200 hover:text-red-500'}`}
+        >
+          <Heart size={20} className={`transition-transform ${veureFavorits ? "fill-white" : "group-hover:scale-110"}`} />
+          <span className="hidden md:inline">{veureFavorits ? 'Tancar' : 'Favorits'}</span>
+          {favoritsCount > 0 && !veureFavorits && (
+            <span className="absolute -top-2 -right-2 h-5 w-5 flex items-center justify-center rounded-full bg-foreground text-background text-[10px] shadow-sm">
+              {favoritsCount}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {!isHome && (
+        // També centrem el comptador de resultats
+        <div className="mt-3 flex justify-center items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted animate-in fade-in slide-in-from-top-1">
+          {veureFavorits 
+            ? <span className="text-red-500">Mostrant {totalRecursos} favorits</span>
+            : <span>{totalRecursos} Recursos trobats</span>
+          }
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -681,6 +1164,32 @@ export default function SkeletonList() {
         </div>
       ))}
     </div>
+  )
+}
+
+==================================================
+ ARXIU: src/components/Toast.jsx
+==================================================
+
+'use client'
+import { motion, AnimatePresence } from 'framer-motion'
+
+export default function Toast({ message, isVisible }) {
+  return (
+    <AnimatePresence>
+      {isVisible && (
+        <div className="fixed bottom-8 inset-x-0 flex justify-center z-[60] pointer-events-none">
+          <motion.div
+            initial={{ opacity: 0, y: 20, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.9 }}
+            className="bg-foreground text-background px-6 py-3 rounded-full shadow-2xl font-medium text-sm flex items-center gap-2"
+          >
+            {message}
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
   )
 }
 
